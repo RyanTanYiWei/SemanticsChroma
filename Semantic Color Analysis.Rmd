@@ -1,0 +1,625 @@
+---
+title: "Semantic Colour Analysis"
+output: rmarkdown::github_document
+---
+
+## List of Functions:
+
+* top_RGB_graph: Top Words, Analayze RGB, Plot Frequency
+* top_RGB_data: Top Words, Analayze RGB, Plot Dataframe
+
+* word_RGB_graph: Query Word, Analyze RGB, Plot Bar Graph
+* word_RGB_data: Query Word, Analyze RGB, Plot Dataframe
+
+* word_lum_graph: Query Word, Analyze Lum, Plot Bar Graph
+* word_lum_data: Query Word, Analyze Lum, Plot Dataframe
+* word_lum_RGB_scatter_smooth: Query Word, Analyze Lum, Plot Scatter w Smooth
+* word_lum_RGB_scatter_data: Query Word, Analyze Lum, Plot Dataframe
+
+* word_temp_RGB_scatter: Query Word, Analyze Temp, Plot Scatter
+* word_temp_RGB_scatter_smooth: Query Word, Analyze Temp, Plot Scatter w Smooth
+* word_temp_RGB_scatter_data: Query Word, Analyze Temp, Plot Dataframe
+
+
+Clear 
+```{r}
+rm(list = ls())
+```
+
+Create Library
+```{r message=FALSE, warning=FALSE}
+library(devtools)
+
+#install_github("detsutut/chroma", subdir="chromaR")
+
+library(subtools) #subtitles manipulation
+library(chromaR) #chromatic package
+library(tidytext) 
+library(chroma)
+library(hms)
+library(tidyverse)
+library(ggplot2)
+library(data.table)
+library(dplyr)
+library(stringr)
+library(reshape2)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(magrittr)
+library(readtext)
+library(stringi)
+library(quanteda)
+library(SnowballC)
+library(stopwords)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(stringr)
+library(tidytext)
+library(rio)
+library(tm)
+library(knitr)
+library(reshape)
+```
+
+# Cleaning
+
+## 1 Define Parameters and Files
+```{r}
+moviename = "Fight Club (1999)"
+
+movielistframes = getFrames("frames/Fight.Club.10th.Anniversary.Edition.1999.720p.BrRip.x264.YIFY.mp4.csv")
+subs = data.frame(read_subtitles("subtitles/Fight.Club.10th.Anniversary.Edition.1999.720p.BrRip.x264.YIFY.srt"))
+
+framerate = 23.98
+```
+
+
+## 2.1 Process Frames 
+
+### 2.1.1 (for subs) Write Function to average colours within on Timeframe
+
+```{r}
+#Retrieve Movie Frames
+movieframes_df = data.frame(movielistframes)
+#add seconds parameter
+movieframes_df = movieframes_df %>% mutate(s = frameId/framerate)
+
+## Function
+GetColorFromDialogue = function(movie_df,start_hms,end_hms){
+  start_s = as.numeric(start_hms)
+  end_s = as.numeric(end_hms)
+  newframe_df = movieframes_df %>% 
+    filter( s <= end_s & s >= start_s) %>%
+    summarise_if(is.numeric, mean) %>%
+    mutate(hexRGB = rgb(R,G,B, maxColorValue = 255)) %>%
+    select(R,G,B,lum,hexRGB)
+  return(newframe_df)
+}
+```
+
+##2.2 Process Subs
+
+### 2.2.1 Check which Dialogues are Advert and Remove
+```{r}
+print(head(subs))
+
+#1 means dialogue 1 is removed
+subs1 = subs[-c(1), ] 
+```
+
+### 2.2.2 Recheck List
+```{r}
+print(head(subs1))
+```
+
+
+### 2.2.3 Get Subtitles Data Frame and Insert Average Chromatic 
+```{r message=FALSE, warning=FALSE}
+#change col names
+subs2 = subs1 %>% mutate(origin_text = Text_content)
+colnames(subs2) = c("Dialogue_ID","Timecode_in","Timecode_out","text","origin_text")
+
+
+#add additional Chromatic Data for Dialogue
+subs3 = subs2
+subs3$R = subs3$G = subs3$B = subs3$lum = subs3$hexRGB = NA
+subs3$R[1861]
+
+for (i in 1:nrow(subs3)){
+  info_df = GetColorFromDialogue(movieframes_df,subs3$Timecode_in[i],subs3$Timecode_out[i])
+  #insert RGB data
+  subs3$R[i] = info_df$R
+  subs3$G[i] = info_df$G
+  subs3$B[i] = info_df$B
+  subs3$lum[i] = info_df$lum
+  subs3$hexRGB[i] = info_df$hexRGB
+}
+
+#tokenize into words instead
+subs_word = unnest_tokens(subs3,word,text)
+
+#clean tokens
+data(stop_words)
+subs_word_clean = subs_word %>% anti_join(stop_words) %>% 
+  filter(!grepl('[1234567890]', word)) %>%
+  filter(!grepl('<U+813F>', word)) %>% 
+  add_count(word) %>% 
+  arrange(desc(n))
+
+#add word count and arrange by count
+#subs_word_clean 
+```
+
+Show Text Frequency
+```{r}
+#Check instances
+wordcount = subs_word_clean[,c(10,11)] %>%
+  distinct %>% # average the colours 
+  arrange(desc(n)) %>% 
+  filter(n > 5)  #CUT OFF FOR OCCURANCE
+
+#wordcount
+```
+
+
+
+
+
+
+
+# Analysis
+
+
+## 0 Top Words Analysis
+
+Top 20 Most Frequent Word
+```{r}
+
+top_RGB_graph = function(subs_word_clean,top_words,upperbound,lowerbound,correction,flip){
+  
+  #filter RGB
+  subs_df = subs_word_clean[,c(6:11)] 
+  
+  #average RGB values
+  avg_subs_df = subs_df %>% 
+    group_by(word) %>%
+    mutate_each(funs(mean)) %>%  
+    distinct %>% # average the colours 
+    arrange(desc(n)) %>% 
+    mutate(hexRGB = rgb(R,G,B,maxColorValue = 255)) %>%  #add hexRGB
+    filter(n > 1)  #remove singular instance
+  
+  df = avg_subs_df %>% filter (n>=lowerbound && n<=upperbound) %>%.[1:top_words,]
+  df$vividRGB = vividHex(df$hexRGB,c(correction))
+
+  positions = df$word
+  p<-ggplot(df, aes(x=reorder(word,-n), y=n, fill=word)) +
+    geom_bar(stat="identity") + scale_x_discrete(limits = positions)
+  
+  if (flip == "Y"){
+    return( p + ggtitle(paste("Top ",top_words," Words",sep=""),paste(lowerbound," <= n <= ",upperbound,sep="") ) + scale_fill_manual(values = df$vividRGB) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + theme(legend.position = "none") + coord_flip() )
+  }
+  else{
+    return( p + ggtitle(paste("Top ",top_words," Words",sep=""),paste(lowerbound," <= n <= ",upperbound,sep="") ) + scale_fill_manual(values = df$vividRGB) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + theme(legend.position = "none"))
+    
+  }
+  
+}
+  
+top_RGB_data = function(subs_word_clean,top_words,upperbound,lowerbound,correction){
+  
+  #filter RGB
+  subs_df = subs_word_clean[,c(6:11)] 
+  
+  #average RGB values
+  avg_subs_df = subs_df %>% 
+    group_by(word) %>%
+    mutate_each(funs(mean)) %>%  
+    distinct %>% # average the colours 
+    arrange(desc(n)) %>% 
+    mutate(hexRGB = rgb(R,G,B,maxColorValue = 255)) %>%  #add hexRGB
+    filter(n > 1)  #remove singular instance
+  
+  df = avg_subs_df %>% filter (n>=lowerbound && n<=upperbound) %>%.[1:top_words,]
+  df$vividRGB = vividHex(df$hexRGB,c(correction))
+
+  return(df)
+}
+
+
+```
+
+Sample Run
+```{r warning=FALSE}
+top_RGB_graph(subs_word_clean, top_words = 20, upperbound = 999, lowerbound = 0, correction = 'medium', flip = 'N')
+head(top_RGB_data(subs_word_clean, top_words = 20, upperbound = 999, lowerbound = 0, correction = 'medium'))
+```
+
+
+
+
+
+## 1 word_RGB_graph [BAR GRAPH]
+```{r}
+##EXECUTE GRAPH
+
+word_RGB_graph = function(subs_word_clean,query,choice,correction,flip){
+  
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df$vividRGB = vividHex(w_df$hexRGB,c(correction))
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  
+  #graph
+  if (choice == "Time") {
+    
+    #plot time graph
+    p<-ggplot(w_df, aes(x=reorder(Time,-h), y = h, fill = Time))  +
+      geom_bar(stat="identity")
+    
+    if (flip=="Y"){
+      return(p + ggtitle("Word Query, RGB",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1], "  |  cor = ", correction, sep="")) + scale_fill_manual(values = simpl_df$vividRGB) + theme(legend.position = "none") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + coord_flip() )
+    }
+    else{
+      return(p + ggtitle("Word Query, RGB",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1], "  |  cor = ", correction, sep="")) + scale_fill_manual(values = simpl_df$vividRGB) + theme(legend.position = "none") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)))
+    }
+    
+  }
+  if (choice == "ID") {
+     #plot ID graph
+    p<-ggplot(w_df, aes(x=reorder(Dialogue_ID,-h), y = h, fill = Dialogue_ID))  +
+      geom_bar(stat="identity")
+    
+    if (flip=="Y"){
+      return(p + ggtitle("Word Query, RGB",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1], "  |  cor = ", correction, sep="")) + scale_fill_manual(values = simpl_df$vividRGB) + theme(legend.position = "none") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + coord_flip() )
+    }
+    else{
+      return(p + ggtitle("Word Query, RGB",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1], "  |  cor = ", correction, sep="")) + scale_fill_manual(values = simpl_df$vividRGB) + theme(legend.position = "none") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)))
+    }
+  }
+}
+
+##EXECUTE DATAFRAME
+
+word_RGB_data = function(subs_word_clean,query,choice,correction){
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df$vividRGB = vividHex(w_df$hexRGB,c(correction))
+  
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  #print dialogue data
+  data.frame(simpl_df$Time,simpl_df$Dialogue_ID,simpl_df$origin_text,simpl_df$vividRGB,simpl_df$hexRGB)
+}
+```
+
+Sample Test
+```{r}
+#df, query, choice(Time/ID), correction (ultra/strong/medium/light), flip (Y/N)
+word_RGB_graph(subs_word_clean, query = "jack's",choice = "Time", correction = "light", flip = "N") 
+head(word_RGB_data(subs_word_clean, query = "jack's",choice = "Time", correction = "light") )
+
+word_RGB_graph(subs_word_clean, query = "mayhem",choice = "Time", correction = "medium", flip = "N") 
+head(word_RGB_data(subs_word_clean, query = "mayhem",choice = "Time", correction = "medium") )
+word_RGB_graph(subs_word_clean, query = "pain",choice = "Time", correction = "light", flip = "N") 
+head(word_RGB_data(subs_word_clean, query = "pain",choice = "Time", correction = "light") )
+```
+
+## 2 word_LUM_graph [BAR GRAPH]
+
+```{r}
+##EXECUTE GRAPH
+
+word_lum_graph = function(subs_word_clean,query,choice,flip){
+  
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df = w_df %>% mutate(lumRGB = hsl(h=0,s=0,l= lum/120))
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  
+  #graph
+  if (choice == "Time") {
+    
+    #plot time graph
+    p<-ggplot(w_df, aes(x=reorder(Time,-h), y = h, fill = Time))  +
+      geom_bar(stat="identity")
+    
+    if (flip=="Y"){
+      return(p + ggtitle("Word Query, Lum",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1], sep="")) + scale_fill_manual(values = simpl_df$lumRGB) + theme(legend.position = "none") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + coord_flip() )
+    }
+    else{
+      return(p + ggtitle("Word Query, Lum",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , sep="")) + scale_fill_manual(values = simpl_df$lumRGB) + theme(legend.position = "none") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)))
+    }
+    
+  }
+  if (choice == "ID") {
+     #plot ID graph
+    p<-ggplot(w_df, aes(x=reorder(Dialogue_ID,-h), y = h, fill = Dialogue_ID))  +
+      geom_bar(stat="identity")
+    
+    if (flip=="Y"){
+      return(p + ggtitle("Word Query, Lum",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , sep="")) + scale_fill_manual(values = simpl_df$lumRGB) + theme(legend.position = "none") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + coord_flip() )
+    }
+    else{
+      return(p + ggtitle("Word Query, Lum",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , sep="")) + scale_fill_manual(values = simpl_df$lumRGB) + theme(legend.position = "none") + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)))
+    }
+  }
+}
+
+##EXECUTE DATAFRAME
+
+word_lum_data = function(subs_word_clean,query,choice){
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df = w_df %>% mutate(lumRGB = hsl(h=0,s=0,l= lum/120))
+  
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  #print dialogue data
+  data.frame(simpl_df$Time,simpl_df$Dialogue_ID,simpl_df$origin_text,simpl_df$lum,simpl_df$lumRGB)
+}
+```
+
+Sample Test
+```{r}
+word_lum_graph(subs_word_clean, query = "tyler",choice = "Time",  flip = "N") 
+head(word_lum_data(subs_word_clean, query = "tyler",choice = "Time"))
+
+word_RGB_graph(subs_word_clean, query = "tyler",choice = "Time", correction = "medium", flip = "N") 
+head(word_RGB_data(subs_word_clean, query = "tyler",choice = "Time", correction = "medium"))
+```
+
+## 3 word_LUM_ [Scatter] 
+
+```{r}
+##EXECUTE GRAPH
+
+word_lum_RGB_scatter = function(subs_word_clean,query,choice,correction,size){
+  
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df$vividRGB = vividHex(w_df$hexRGB,c(correction))
+  w_df = w_df %>% mutate(lumRGB = hsl(h=0,s=0,l= lum/120))
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  
+  #graph
+  if (choice == "Time") {
+    p <- ggplot(w_df, aes(x=Timecode_in, y = lum, color = Time))  +
+      geom_point(size = size)
+    return(p  + ggtitle("Word Query, Lum/RGB Scatter",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , "  |  cor = ", correction, sep="")) + 
+      scale_color_manual(values = simpl_df$vividRGB) + 
+      theme(legend.position = "none")
+      )
+    
+  }
+  if (choice == "ID") {
+    p <- ggplot(w_df, aes(x=as.numeric(Dialogue_ID), y = lum, color = Dialogue_ID))  +
+      geom_point(size = size) 
+    return(p  + ggtitle("Word Query, Lum/RGB Scatter",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , "  |  cor = ", correction, sep="")) + 
+      scale_color_manual(values = simpl_df$vividRGB) + 
+      theme(legend.position = "none"))
+  }
+}
+
+##EXECUTE GRAPH
+
+word_lum_RGB_scatter_smooth = function(subs_word_clean,query,choice,correction,size,span){
+  
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df$vividRGB = vividHex(w_df$hexRGB,c(correction))
+  w_df = w_df %>% mutate(lumRGB = hsl(h=0,s=0,l= lum/120))
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  
+  
+  #graph
+  if (choice == "Time") {
+    p <- ggplot(w_df, aes(x=Timecode_in, y = lum))  +
+      geom_point(size = size) + geom_smooth(method = "loess",formula = 'y ~ x',color = "red",se = F , span = span)
+    return(p  + ggtitle("Word Query, Lum/RGB Scatter Geom_Smooth",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , "  |  cor = ", correction, sep="")) + 
+      scale_color_manual(values = simpl_df$vividRGB) + 
+      theme(legend.position = "none")
+      )
+    
+  }
+  if (choice == "ID") {
+    p <- ggplot(w_df, aes(x=as.numeric(Dialogue_ID), y = lum))  +
+      geom_point(size = size) + geom_smooth(method = "loess",formula = 'y ~ x',color = "red",se = F ,span = span)
+    return(p  + ggtitle("Word Query, Lum/RGB Scatter Geom_Smooth",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , "  |  cor = ", correction,sep="")) + 
+      scale_color_manual(values = simpl_df$vividRGB) + 
+      theme(legend.position = "none"))
+  }
+}
+
+
+##EXECUTE DATAFRAME
+
+word_lum_RGB_scatter_data = function(subs_word_clean,query,choice){
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df$vividRGB = vividHex(w_df$hexRGB,c("light"))
+  w_df = w_df %>% mutate(lumRGB = hsl(h=0,s=0,l= lum/120))
+  
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  #print dialogue data
+  data.frame(simpl_df$Time,simpl_df$Dialogue_ID,simpl_df$origin_text,simpl_df$lum,simpl_df$vividRGB)
+}
+```
+
+Sample Test
+```{r}
+w = "marla"
+
+word_lum_graph(subs_word_clean, query = w, choice = "Time",  flip = "N") 
+word_RGB_graph(subs_word_clean, query = w, choice = "Time", correction = "medium", flip = "N") 
+word_lum_RGB_scatter(subs_word_clean, query = w, choice = "Time", correction = "medium",size=8)
+word_lum_RGB_scatter(subs_word_clean, query = w, choice = "Time", correction = "strong",size=8)
+word_lum_RGB_scatter_smooth(subs_word_clean, query = w, choice = "Time", correction = "medium", size=2, span=1)
+head(word_lum_RGB_scatter_data(subs_word_clean, query = w, choice = "Time"))
+```
+
+## 4 word_temp [Scatter]
+
+get_temp function
+```{r}
+get_temp = function(r,g,b){
+  hsl = as.hsv(rgb(r,g,b, maxColorValue = 255))
+  temp = hsl[1]
+  if (temp>180){
+    temp = (360-temp)
+  }
+  return(temp)
+}
+```
+
+main function
+```{r}
+word_temp_RGB_scatter = function(subs_word_clean,query,choice,correction,size){
+  
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df$vividRGB = vividHex(w_df$hexRGB,c(correction))
+  w_df$temp = 0
+  
+  for (i in 1:nrow(w_df)){
+    w_df[i,]$temp = get_temp(w_df[i,]$R,w_df[i,]$G,w_df[i,]$B)
+  }
+  
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  
+  #graph
+  if (choice == "Time") {
+    
+    p <- ggplot(w_df, aes(x=Timecode_in, y = temp, color = Time))  +
+      geom_point(size = size) 
+    
+    return(p  + ggtitle("Word Query, temp/RGB Scatter",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , "  |  cor = ", correction, sep="")) + 
+      scale_color_manual(values = simpl_df$vividRGB) + 
+      theme(legend.position = "none") +
+      geom_hline(yintercept=90) +
+      coord_cartesian(ylim = c(0, 180)))
+    
+  }
+  if (choice == "ID") {
+    p <- ggplot(w_df, aes(x=as.numeric(Dialogue_ID), y = temp, color = Dialogue_ID))  +
+      geom_point(size = size) 
+    return(p  + ggtitle("Word Query, temp/RGB Scatter",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , "  |  cor = ", correction, sep="")) + 
+      scale_color_manual(values = simpl_df$vividRGB) + 
+      theme(legend.position = "none") +
+      geom_hline(yintercept=90) +
+      coord_cartesian(ylim = c(0, 180))
+      )
+      
+      
+  }
+}
+
+##EXECUTE GRAPH
+
+word_temp_RGB_scatter_smooth = function(subs_word_clean,query,choice,correction,size,span){
+  
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df$vividRGB = vividHex(w_df$hexRGB,c(correction))
+  w_df$temp = 0
+  
+  for (i in 1:nrow(w_df)){
+    w_df[i,]$temp = get_temp(w_df[i,]$R,w_df[i,]$G,w_df[i,]$B)
+  }
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  
+  
+  #graph
+  if (choice == "Time") {
+    p <- ggplot(w_df, aes(x=Timecode_in, y = temp))  +
+      geom_point(size = size) + geom_smooth(method = "loess",formula = 'y ~ x',color = "red",se = F , span = span)
+    return(p  + ggtitle("Word Query, temp/RGB Scatter Geom_Smooth",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , "  |  cor = ", correction, sep="")) + 
+      scale_color_manual(values = simpl_df$vividRGB) + 
+      theme(legend.position = "none") +
+      geom_hline(yintercept=90) +
+      coord_cartesian(ylim = c(0, 180))
+      )
+    
+  }
+  if (choice == "ID") {
+    p <- ggplot(w_df, aes(x=as.numeric(Dialogue_ID), y = temp))  +
+      geom_point(size = size) + geom_smooth(method = "loess",formula = 'y ~ x',color = "red",se = F ,span = span)
+    return(p  + ggtitle("Word Query, temp/RGB Scatter Geom_Smooth",paste(moviename,"  |  '",w_df$word[1],"'  |  instances = ",w_df$n[1] , "  |  cor = ", correction,sep="")) + 
+      scale_color_manual(values = simpl_df$vividRGB) + 
+      theme(legend.position = "none"))
+  }
+}
+
+
+##EXECUTE DATAFRAME
+
+word_temp_RGB_scatter_data = function(subs_word_clean,query,choice){
+  w_df = subs_word_clean %>% filter(word == query)
+  w_df$Time = as.character(round_hms(w_df$Timecode_in, 1))
+  w_df$h = 1 
+  w_df$Dialogue_ID = str_pad(w_df$Dialogue_ID, 4, pad = "0")
+  w_df$vividRGB = vividHex(w_df$hexRGB,c("light"))
+  w_df$temp = 0
+  
+  for (i in 1:nrow(w_df)){
+    w_df[i,]$temp = get_temp(w_df[i,]$R,w_df[i,]$G,w_df[i,]$B)
+  }
+  
+  
+  #for color matching
+  simpl_df = w_df  %>% distinct
+  #print dialogue data
+  data.frame(simpl_df$Time,simpl_df$Dialogue_ID,simpl_df$origin_text,simpl_df$temp,simpl_df$vividRGB)
+}
+```
+
+Sample Test
+```{r}
+w="marla"
+word_temp_RGB_scatter(subs_word_clean, query = w, choice = "Time", correction = "ultra" , size=8)
+word_temp_RGB_scatter_smooth(subs_word_clean, query = w, choice = "Time", correction = "medium", size=2, span=1)
+head(word_temp_RGB_scatter_data(subs_word_clean, query = w, choice = "Time"))
+
+```
+
+
+
+
